@@ -1,0 +1,117 @@
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  annotations:
+    kubemacpool.io/transaction-timestamp: "2026-10-27T16:58:52.078398964Z"
+    kubevirt.io/latest-observed-api-version: v1
+    kubevirt.io/storage-observed-api-version: v1
+    openshift.io/display-name: vader
+    original-ID: vm-10001
+  creationTimestamp: "2026-10-27T15:43:43Z"
+  finalizers:
+  - kubevirt.io/virtualMachineControllerFinalize
+  generation: 5
+  labels:
+    guestConverted: "true"
+    migration: 906ce7a7-6f03-4d3b-b207-d9c713a33b18
+    plan: 6de6c124-11b1-4f3e-82a6-b89286560b88
+    plan-name: vader-rename
+    plan-namespace: openshift-mtv
+    resource: vm-config
+    vmID: vm-10001
+  name: vader.syangsao.net
+  namespace: virt-linux
+  resourceVersion: "21232124"
+  uid: c7f445c1-ff1c-44ff-aa69-206fcd986994
+spec:
+  preference:
+    kind: virtualmachineclusterpreference
+    name: rhel.9
+  runStrategy: Halted
+  template:
+    metadata:
+      annotations:
+        kubevirt.io/pci-topology-version: v3
+        vm.kubevirt.io/flavor: ""
+        vm.kubevirt.io/os: ""
+        vm.kubevirt.io/workload: ""
+      labels:
+        app: vader.syangsao.net
+    spec:
+      architecture: amd64
+      domain:
+        clock:
+          timezone: UTC
+        cpu:
+          cores: 1
+          sockets: 2
+        devices:
+          disks:
+          - bootOrder: 1
+            disk:
+              bus: virtio
+            name: vol-0
+            serial: 6000C298-889b-f9c4-b
+          inputs:
+          - bus: virtio
+            name: tablet
+            type: tablet
+          interfaces:
+          - bridge: {}
+            macAddress: 00:50:56:a5:74:ae
+            model: virtio
+            name: net-0
+            pciAddress: 0000:0b:00.0
+          tpm:
+            enabled: false
+        features:
+          acpi: {}
+          smm:
+            enabled: true
+        firmware:
+          bootloader:
+            efi:
+              secureBoot: true
+          serial: VMware-42 25 83 46 5b 06 f7 f9-b0 36 a7 88 d8 71 8e 37
+          uuid: 44c3a580-ff20-4f69-b81e-b9a4220e6c41
+        machine:
+          type: pc-q35-rhel9.8.0
+        memory:
+          guest: 8Gi
+        resources: {}
+      networks:
+      - multus:
+          networkName: default/vlan-60
+        name: net-0
+      volumes:
+      - name: vol-0
+        persistentVolumeClaim:
+          claimName: vader-rename-vm-10001-tmmt5
+status:
+  conditions:
+  - lastProbeTime: "2026-10-27T16:59:03Z"
+    lastTransitionTime: "2026-10-27T16:59:03Z"
+    message: VMI does not exist
+    reason: VMINotExists
+    status: "False"
+    type: Ready
+  - lastProbeTime: null
+    lastTransitionTime: null
+    status: "True"
+    type: LiveMigratable
+  - lastProbeTime: null
+    lastTransitionTime: null
+    status: "True"
+    type: StorageLiveMigratable
+  desiredGeneration: 5
+  observedGeneration: 5
+  preferenceRef:
+    controllerRevisionRef:
+      name: vader.syangsao.net-rhel.9-v1beta1-4139c59f-906b-4555-a614-d1d22842ab0e-1
+    kind: virtualmachineclusterpreference
+    name: rhel.9
+  printableStatus: Stopped
+  runStrategy: Halted
+  volumeSnapshotStatuses:
+  - enabled: true
+    name: vol-0
