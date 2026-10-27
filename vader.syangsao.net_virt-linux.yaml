@@ -2,10 +2,10 @@ apiVersion: kubevirt.io/v1
 kind: VirtualMachine
 metadata:
   labels:
-    guestConverted: "true"
-    migration: 906ce7a7-6f03-4d3b-b207-d9c713a33b18
-    plan: 6de6c124-11b1-4f3e-82a6-b89286560b88
-    plan-name: vader-rename
+    guestConverted: 'true'
+    migration: 9292ac58-157c-4b6c-9909-1bb25ea041ac
+    plan: 3af4a88e-2e91-4dae-a750-4ad71cd33f07
+    plan-name: copy-of-vader-rename2
     plan-namespace: openshift-mtv
     resource: vm-config
     vmID: vm-10001
@@ -15,14 +15,14 @@ spec:
   preference:
     kind: virtualmachineclusterpreference
     name: rhel.9
-  runStrategy: Halted
+  runStrategy: Always
   template:
     metadata:
       annotations:
         kubevirt.io/pci-topology-version: v3
-        vm.kubevirt.io/flavor: ""
-        vm.kubevirt.io/os: ""
-        vm.kubevirt.io/workload: ""
+        vm.kubevirt.io/flavor: ''
+        vm.kubevirt.io/os: ''
+        vm.kubevirt.io/workload: ''
       labels:
         app: vader
     spec:
@@ -61,7 +61,7 @@ spec:
             efi:
               secureBoot: true
           serial: VMware-42 25 83 46 5b 06 f7 f9-b0 36 a7 88 d8 71 8e 37
-          uuid: 44c3a580-ff20-4f69-b81e-b9a4220e6c41
+          uuid: 1f397228-53fb-4dd8-be3b-9cc92507470e
         machine:
           type: pc-q35-rhel9.8.0
         memory:
@@ -74,4 +74,4 @@ spec:
       volumes:
       - name: vol-0
         persistentVolumeClaim:
-          claimName: vader-rename-vm-10001-tmmt5
+          claimName: copy-of-vader-rename2-vm-10001-6vw5d

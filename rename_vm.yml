@@ -8,225 +8,251 @@
 #
 # Usage:
 #   ansible-playbook rename_vm.yml \
-#     -e vm_name=vader.syangsao.net -e new_name=vader -e namespace=virt-linux \
+#     -e vm_name=vader.syangsao.net -e new_name=vader -e vm_namespace=virt-linux \
 #     [-e start_after=true] [-e dry_run=false]
 #
 # Requirements:
 #   * `oc` (or `kubectl`) and `virtctl` on PATH, authenticated to the target cluster.
 #   * Python 3 + PyYAML on the controller host (used for the manifest transform).
 #
-# The playbook is idempotent-ish per run but is designed to be run ONCE per rename:
-# it stops the VM, rewrites the manifest under a fixed filename, deletes the old VM,
-# and applies the new one. Re-running against an already-renamed cluster will fail the
-# "read current VM" step (expected — the source name no longer exists).
+# The playbook is designed to be run ONCE per rename: it stops the VM, rewrites the
+# manifest under a fixed filename, deletes the old VM, and applies the new one.
+# Re-running against an already-renamed cluster will fail the "read current VM" step
+# (expected — the source name no longer exists).
 
-name: Rename a KubeVirt VM keeping its data disk
+- name: Rename a KubeVirt VM keeping its data disk
+  hosts: localhost
+  connection: local
+  gather_facts: false
 
-hosts: localhost
-connection: local
-gather_facts: false
+  vars:
+    vm_name: vader.syangsao.net        # current VirtualMachine name
+    new_name: vader                    # desired name (metadata.name cannot change in place)
+    vm_namespace: virt-linux              # vm_namespace the VM lives in
+    start_after: true                  # power the renamed VM back on at the end
+    dry_run: false                     # if true: stop + patch PV only; do NOT delete/apply
+    workdir: "{{ playbook_dir }}"      # where manifests are written
 
-vars:
-  vm_name: vader.syangsao.net        # current VirtualMachine name
-  new_name: vader                    # desired name (metadata.name cannot change in place)
-  namespace: virt-linux              # namespace the VM lives in
-  start_after: true                  # power the renamed VM back on at the end
-  dry_run: false                     # if true: stop + patch PV only; do NOT delete/apply
-  workdir: "{{ playbook_dir }}"      # where manifests are written
+  tasks:
+    # -------------------------------------------------------------------------
+    # 0. Discovery — resolve volume -> PVC -> PV from the live VM
+    # -------------------------------------------------------------------------
+    - name: Read the current VM manifest (falls back to backup if already deleted)
+      command: oc get vm {{ vm_name }} -n {{ vm_namespace }} -o yaml
+      register: vm_yaml_raw
+      failed_when: false
 
-tasks:
-  # ---------------------------------------------------------------------------
-  # 0. Discovery — resolve volume -> PVC -> PV from the live VM
-  # ---------------------------------------------------------------------------
-  - name: Read the current VM manifest
-    command: oc get vm {{ vm_name }} -n {{ namespace }} -o yaml
-    register: vm_yaml_raw
+    - name: Use backup file if the VM is already gone (re-run after partial failure)
+      set_fact:
+        vm_yaml_raw: "{{ vm_yaml_raw | combine({'stdout': lookup('file', workdir ~ '/' ~ vm_name ~ '_' ~ vm_namespace ~ '.yaml.bkp')}) }}"
+      when: vm_yaml_raw.rc != 0
 
-  - name: Save pristine backup of the VM manifest
-    copy:
-      content: "{{ vm_yaml_raw.stdout }}"
-      dest: "{{ workdir }}/{{ vm_name }}_{{ namespace }}.yaml.bkp"
-      mode: "0644"
+    - name: Save pristine backup of the VM manifest
+      copy:
+        content: "{{ vm_yaml_raw.stdout }}"
+        dest: "{{ workdir }}/{{ vm_name }}_{{ vm_namespace }}.yaml.bkp"
+        mode: "0644"
 
-  - name: Resolve each volume to its PVC and PV (and capture PVC access modes)
-    set_fact:
-      disk_map: >-
-        {{ disk_map | default([]) + [ {
-             'volume': v.name,
-             'pvc': v.persistentVolumeClaim.claimName,
-             'pv':  (lookup('pipe', 'oc get pvc ' ~ v.persistentVolumeClaim.claimName ~
-                            ' -n ' ~ namespace ~ ' -o jsonpath={.spec.volumeName}')).strip(),
-             'accessModes': (lookup('pipe', 'oc get pvc ' ~ v.persistentVolumeClaim.claimName ~
-                                    ' -n ' ~ namespace ~ ' -o jsonpath={.spec.accessModes[0]}')).strip()
-           } ] }}
-    loop: "{{ vm_yaml_raw.stdout | from_yaml | query('json_query', 'spec.template.spec.volumes[*]') }}"
-    loop_control:
-      loop_var: v
-    when: v.persistentVolumeClaim is defined and v.persistentVolumeClaim.claimName is defined
+    - name: Resolve each volume to its PVC, PV, access modes, and requested size
+      set_fact:
+        disk_map: >-
+          {{ disk_map | default([]) + [ {
+               'volume': v.name,
+               'pvc': v.persistentVolumeClaim.claimName,
+               'pv':  (lookup('pipe', 'oc get pvc ' ~ v.persistentVolumeClaim.claimName ~
+                              ' -n ' ~ vm_namespace ~ ' -o jsonpath={.spec.volumeName}')).strip(),
+               'accessModes': (lookup('pipe', 'oc get pvc ' ~ v.persistentVolumeClaim.claimName ~
+                                      ' -n ' ~ vm_namespace ~ ' -o jsonpath={.spec.accessModes[0]}')).strip(),
+               'storage': (lookup('pipe', 'oc get pvc ' ~ v.persistentVolumeClaim.claimName ~
+                                  ' -n ' ~ vm_namespace ~ ' -o jsonpath={.spec.resources.requests.storage}')).strip()
+             } ] }}
+      loop: "{{ (vm_yaml_raw.stdout | from_yaml).spec.template.spec.volumes }}"
+      loop_control:
+        loop_var: v
+      when: v.persistentVolumeClaim is defined and v.persistentVolumeClaim.claimName is defined
 
-  - name: Assert we found at least one disk to protect
-    assert:
-      that: disk_map | length > 0
-      fail_msg: "VM {{ vm_name }} has no PVC-backed volumes."
+    - name: Assert we found at least one disk to protect
+      assert:
+        that: disk_map | length > 0
+        fail_msg: "VM {{ vm_name }} has no PVC-backed volumes."
 
-  - name: Show the disks we will protect
-    debug:
-      msg: "{{ disk_map }}"
+    - name: Show the disks we will protect
+      debug:
+        msg: "{{ disk_map }}"
 
-  # ---------------------------------------------------------------------------
-  # 1. Stop the VM (must be fully off before re-attach)
-  # ---------------------------------------------------------------------------
-  - name: Stop the VM
-    command: virtctl stop {{ vm_name }} -n {{ namespace }}
-    changed_when: "'scheduled to stop' in stdout"
+    # -------------------------------------------------------------------------
+    # 1. Stop the VM (must be fully off before re-attach)
+    # -------------------------------------------------------------------------
+    - name: Stop the VM
+      command: virtctl stop {{ vm_name }} -n {{ vm_namespace }}
+      register: stop_vm
+      failed_when: false
+      changed_when: "'scheduled to stop' in stop_vm.stdout"
 
-  - name: Wait for the VMI to be gone
-    command: oc get vmi {{ vm_name }} -n {{ namespace }} -o jsonpath='{.status.phase}'
-    register: vmi_phase
-    until: vmi_phase.rc != 0            # NotFound => VMI cleaned up
-    retries: 30
-    delay: 5
+    - name: Wait for the VMI to be gone
+      command: oc get vmi {{ vm_name }} -n {{ vm_namespace }} -o jsonpath='{.status.phase}'
+      register: vmi_phase
+      failed_when: false
+      until: vmi_phase.rc != 0            # NotFound => VMI cleaned up
+      retries: 30
+      delay: 5
 
-  # ---------------------------------------------------------------------------
-  # 2. Protect every bound PV (reclaim policy -> Retain). MANDATORY.
-  # ---------------------------------------------------------------------------
-  - name: Patch each PV reclaim policy to Retain
-    command: >-
-      oc patch pv {{ item.pv }}
-      -p {"spec":{"persistentVolumeReclaimPolicy":"Retain"}}
-    loop: "{{ disk_map }}"
-    changed_when: "'patched' in stdout"
+    # -------------------------------------------------------------------------
+    # 2. Protect every bound PV (reclaim policy -> Retain). MANDATORY.
+    # -------------------------------------------------------------------------
+    - name: Patch each PV reclaim policy to Retain
+      command: |
+        oc patch pv {{ item.pv }} \
+          -p '{"spec":{"persistentVolumeReclaimPolicy":"Retain"}}'
+      loop: "{{ disk_map }}"
 
-  - name: Verify every PV is now Retain
-    command: oc get pv {{ item.pv }} -o jsonpath='{.spec.persistentVolumeReclaimPolicy}'
-    register: pv_policy
-    loop: "{{ disk_map }}"
-    loop_control:
-      label: "{{ item.item.pv }}"
+    - name: Verify every PV is now Retain
+      command: oc get pv {{ item.pv }} -o jsonpath='{.spec.persistentVolumeReclaimPolicy}'
+      register: pv_policy
+      loop: "{{ disk_map }}"
+      loop_control:
+        label: "{{ item.item.pv }}"
 
-  - name: Assert all PVs are Retain
-    assert:
-      that: "'Retain' in item.stdout"
-      fail_msg: "PV {{ item.item.pv }} is not Retain (got '{{ item.stdout }}')."
-    loop: "{{ pv_policy.results }}"
-    loop_control:
-      label: "{{ item.item.pv }}"
+    - name: Assert all PVs are Retain
+      assert:
+        that: "'Retain' in item.stdout"
+        fail_msg: "PV {{ item.item.pv }} is not Retain (got '{{ item.stdout }}')."
+      loop: "{{ pv_policy.results }}"
+      loop_control:
+        label: "{{ item.item.pv }}"
 
-  # ---------------------------------------------------------------------------
-  # 3. Transform the manifest: rename + strip server-managed fields
-  # ---------------------------------------------------------------------------
-  - name: Write the renamed manifest (new name, new app label, server fields stripped)
-    command: NEW_NAME={{ new_name }} python3 {{ workdir }}/rename_transform.py < {{ workdir }}/{{ vm_name }}_{{ namespace }}.yaml.bkp > {{ workdir }}/{{ vm_name }}_{{ namespace }}.yaml
+    # -------------------------------------------------------------------------
+    # 3. Transform the manifest: rename + strip server-managed fields
+    # -------------------------------------------------------------------------
+    - name: Write the renamed manifest (new name, new app label, server fields stripped)
+      shell: |
+        NEW_NAME={{ new_name }} python3 {{ workdir }}/rename_transform.py \
+          < {{ workdir }}/{{ vm_name }}_{{ vm_namespace }}.yaml.bkp \
+          > {{ workdir }}/{{ vm_name }}_{{ vm_namespace }}.yaml
+      args:
+        executable: /bin/bash
 
-  - name: Dry-run validate the renamed manifest
-    command: oc apply -f {{ workdir }}/{{ vm_name }}_{{ namespace }}.yaml --dry-run=client -n {{ namespace }}
-    register: dry_apply
-    changed_when: false
+    - name: Dry-run validate the renamed manifest
+      command: oc apply -f {{ workdir }}/{{ vm_name }}_{{ vm_namespace }}.yaml --dry-run=client -n {{ vm_namespace }}
+      register: dry_apply
+      changed_when: false
 
-  # ---------------------------------------------------------------------------
-  # 4. Delete the old VM (skipped in dry_run)
-  # ---------------------------------------------------------------------------
-  - name: Delete the old VM
-    command: oc delete vm {{ vm_name }} -n {{ namespace }}
-    when: not dry_run
-    changed_when: "'deleted' in stdout"
+    # -------------------------------------------------------------------------
+    # 4. Delete the old VM (skipped in dry_run)
+    # -------------------------------------------------------------------------
+    - name: Delete the old VM
+      command: oc delete vm {{ vm_name }} -n {{ vm_namespace }}
+      when: not dry_run
+      register: del_vm
+      changed_when: "'deleted' in del_vm.stdout"
 
-  # ---------------------------------------------------------------------------
-  # 5. Recover a stuck Terminating PVC (MTv/forklift plan cleanup sets a deletionTimestamp)
-  # ---------------------------------------------------------------------------
-  - name: Check each PVC for a deletionTimestamp after VM deletion
-    command: >-
-      oc get pvc {{ item.pvc }} -n {{ namespace }} -o jsonpath={.metadata.deletionTimestamp}
-    register: pvc_delts
-    loop: "{{ disk_map }}"
-    when: not dry_run
+    # -------------------------------------------------------------------------
+    # 5. Recover a stuck Terminating PVC (MTv/forklift plan cleanup sets a deletionTimestamp)
+    # -------------------------------------------------------------------------
+    - name: Check each PVC for a deletionTimestamp after VM deletion
+      command: >-
+        oc get pvc {{ item.pvc }} -n {{ vm_namespace }} -o jsonpath={.metadata.deletionTimestamp}
+      register: pvc_delts
+      loop: "{{ disk_map }}"
+      when: not dry_run
 
-  - name: Identify PVCs stuck in Terminating (non-empty deletionTimestamp)
-    set_fact:
-      stuck_pvcs: >-
-        {{ disk_map
-           | zip(pvc_delts.results | default([]))
-           | selectattr('1', 'defined')
-           | selectattr('1.stdout', 'ne', '')
-           | map(attribute='0.pvc') | list }}
-    when: not dry_run
+    - name: Identify PVCs stuck in Terminating (non-empty deletionTimestamp)
+      set_fact:
+        stuck_pvcs: >-
+          {{ disk_map
+             | zip(pvc_delts.results | default([]))
+             | selectattr('1', 'defined')
+             | selectattr('1.stdout', 'ne', '')
+             | map(attribute='0.pvc') | list }}
+      when: not dry_run
 
-  - name: For each stuck PVC — remove the pvc-protection finalizer so the object is removed
-    command: >-
-      oc patch pvc {{ item }} -n {{ namespace }} --type merge
-      -p {"metadata":{"finalizers":null}}
-    loop: "{{ stuck_pvcs | default([]) }}"
-    changed_when: "'patched' in stdout"
+    - name: For each stuck PVC — remove the pvc-protection finalizer so the object is removed
+      command: |
+        oc patch pvc {{ item }} -n {{ vm_namespace }} --type merge \
+          -p '{"metadata":{"finalizers":null}}'
+      loop: "{{ stuck_pvcs | default([]) }}"
 
-  - name: Wait for the terminating PVC objects to be removed
-    command: oc get pvc {{ item }} -n {{ namespace }} -o jsonpath='{.metadata.uid}'
-    register: gone_check
-    loop: "{{ stuck_pvcs | default([]) }}"
-    until: gone_check.rc != 0           # NotFound => gone
-    retries: 12
-    delay: 5
+    - name: Wait for the terminating PVC objects to be removed
+      command: oc get pvc {{ item }} -n {{ vm_namespace }} -o jsonpath='{.metadata.uid}'
+      register: gone_check
+      loop: "{{ stuck_pvcs | default([]) }}"
+      failed_when: false
+      until: gone_check.rc != 0           # NotFound => gone
+      retries: 12
+      delay: 5
 
-  - name: Re-create each recovered PVC bound to the same PV
-    command: >-
-      oc apply -f -
-    args:
-      stdin: |
-        apiVersion: v1
-        kind: PersistentVolumeClaim
-        metadata:
-          name: {{ item.pvc }}
-          namespace: {{ namespace }}
-        spec:
-          accessModes: ["{{ item.accessModes }}"]
-          volumeName: {{ item.pv }}
-    loop: "{{ disk_map | selectattr('pvc', 'in', stuck_pvcs | default([])) }}"
-    changed_when: "'created' in stdout"
+    - name: Re-create each recovered PVC bound to the same PV
+      command: >-
+        oc apply -f -
+      args:
+        stdin: |
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            name: {{ item.pvc }}
+            namespace: {{ vm_namespace }}
+          spec:
+            accessModes: ["{{ item.accessModes }}"]
+            volumeName: {{ item.pv }}
+            resources:
+              requests:
+                storage: {{ item.storage }}
+      loop: "{{ disk_map | selectattr('pvc', 'in', stuck_pvcs | default([])) }}"
 
-  - name: Manually re-bind each recovered PV to the new PVC (Released PVs do not auto-bind)
-    block:
-      - name: Get the new PVC uid
-        command: oc get pvc {{ item.pvc }} -n {{ namespace }} -o jsonpath='{.metadata.uid}'
-        register: new_uid
+    - name: Manually re-bind each recovered PV to the new PVC (Released PVs do not auto-bind)
+      block:
+        - name: Get the new PVC uid
+          command: oc get pvc {{ item.pvc }} -n {{ vm_namespace }} -o jsonpath='{.metadata.uid}'
+          register: new_uid
+          loop: "{{ disk_map | selectattr('pvc', 'in', stuck_pvcs | default([])) }}"
 
-      - name: Patch PV claimRef to the new PVC
-        command: >-
-          oc patch pv {{ item.pv }} --type merge
-          -p {"spec":{"claimRef":{"name":"{{ item.pvc }}","namespace":"{{ namespace }}","uid":"{{ new_uid.stdout }}"}}}
-        changed_when: "'patched' in stdout"
-    loop: "{{ disk_map | selectattr('pvc', 'in', stuck_pvcs | default([])) }}"
+        - name: Set the uid for the current PVC
+          set_fact:
+            cur_uid: "{{ (new_uid.results | selectattr('item.pvc', 'equalto', item.pvc) | first).stdout }}"
+          loop: "{{ disk_map | selectattr('pvc', 'in', stuck_pvcs | default([])) }}"
 
-  # ---------------------------------------------------------------------------
-  # 6. Apply the renamed VM manifest (skipped in dry_run)
-  # ---------------------------------------------------------------------------
-  - name: Apply the renamed VM manifest
-    command: oc apply -f {{ workdir }}/{{ vm_name }}_{{ namespace }}.yaml
-    when: not dry_run
-    changed_when: "'created' in stdout"
+        - name: Patch PV claimRef to the new PVC
+          command: |
+            oc patch pv {{ item.pv }} --type merge \
+              -p '{"spec":{"claimRef":{"name":"{{ item.pvc }}","namespace":"{{ vm_namespace }}","uid":"{{ cur_uid }}"}}}'
+          loop: "{{ disk_map | selectattr('pvc', 'in', stuck_pvcs | default([])) }}"
 
-  # ---------------------------------------------------------------------------
-  # 7. Start the renamed VM and verify the disk re-attached
-  # ---------------------------------------------------------------------------
-  - name: Start the renamed VM
-    command: virtctl start {{ new_name }} -n {{ namespace }}
-    changed_when: "'scheduled to start' in stdout"
-    when: (start_after | bool) and not dry_run
+    # -------------------------------------------------------------------------
+    # 6. Apply the renamed VM manifest (skipped in dry_run)
+    # -------------------------------------------------------------------------
+    - name: Apply the renamed VM manifest
+      command: oc apply -f {{ workdir }}/{{ vm_name }}_{{ vm_namespace }}.yaml
+      when: not dry_run
+      register: apply_vm
+      changed_when: "'created' in apply_vm.stdout"
 
-  - name: Wait for the renamed VMI to be Running
-    command: oc get vmi {{ new_name }} -n {{ namespace }} -o jsonpath='{.status.phase}'
-    register: vmi_new
-    until: "'Running' in vmi_new.stdout"
-    retries: 60
-    delay: 5
-    when: (start_after | bool) and not dry_run
+    # -------------------------------------------------------------------------
+    # 7. Start the renamed VM and verify the disk re-attached
+    # -------------------------------------------------------------------------
+    - name: Start the renamed VM
+      command: virtctl start {{ new_name }} -n {{ vm_namespace }}
+      register: start_vm
+      failed_when: false
+      changed_when: "'scheduled to start' in start_vm.stdout"
+      when: (start_after | bool) and not dry_run
 
-  - name: Verify each volume still maps to its original PVC
-    command: >-
-      oc get vmi {{ new_name }} -n {{ namespace }}
-      -o jsonpath={range .spec.volumes[*]}{.name} {.persistentVolumeClaim.persistentVolumeClaimName}{"\n"}{end}
-    register: vmi_vols
-    when: (start_after | bool) and not dry_run
+    - name: Wait for the renamed VMI to be Running
+      command: oc get vmi {{ new_name }} -n {{ vm_namespace }} -o jsonpath='{.status.phase}'
+      register: vmi_new
+      failed_when: false
+      until: "'Running' in vmi_new.stdout"
+      retries: 60
+      delay: 5
+      when: (start_after | bool) and not dry_run
 
-  - name: Show final VMI volume mapping
-    debug:
-      msg: "{{ vmi_vols.stdout_lines }}"
-    when: (start_after | bool) and not dry_run
+    - name: Verify each volume still maps to its original PVC
+      command: |
+        oc get vmi {{ new_name }} -n {{ vm_namespace }} \
+          -o 'jsonpath={range .spec.volumes[*]}{.name} {.persistentVolumeClaim.persistentVolumeClaimName}{"\n"}{end}'
+      register: vmi_vols
+      when: (start_after | bool) and not dry_run
+
+    - name: Show final VMI volume mapping
+      debug:
+        msg: "{{ vmi_vols.stdout_lines }}"
+      when: (start_after | bool) and not dry_run

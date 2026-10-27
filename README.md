@@ -451,3 +451,49 @@ oc apply -f ${VM}_${NS}.yaml
 virtctl start $NEW_NAME -n $NS
 oc get vmi $NEW_NAME -n $NS   # verify Running + volume -> same PVC
 ```
+
+---
+
+## Playbook test results (live run on luke)
+
+The playbook was tested end-to-end on the `luke` cluster against a freshly migrated
+`vader.syangsao.net` (namespace `virt-linux`, PVC `copy-of-vader-rename2-vm-10001-6vw5d`,
+PV `pvc-dcb1d431-da22-44b2-8567-147439d33f52`, nfs-csi, 106Gi). Result: **success** — the VM was
+renamed to `vader` and the data disk survived.
+
+| Check | Result |
+|-------|--------|
+| Old VM `vader.syangsao.net` | deleted (NotFound) |
+| New VM `vader` | Running, Ready=True on `control01.syangsao.net` |
+| VMI volume → PVC | `vol-0 → copy-of-vader-rename2-vm-10001-6vw5d` (same PVC) |
+| PVC / PV | Bound to the same PV, reclaim `Retain`, 106Gi |
+| Raw disk on NFS | `disk.img` = 107,374,182,400 bytes (unchanged from baseline) |
+
+### Issues found and fixed during testing
+
+These were real bugs in the first draft of the playbook, all fixed in the committed version:
+
+1. **Playbook structure** — the file was a single mapping; Ansible requires a *list* of plays
+   (`- name:` at the top level). Restructured into one play.
+2. **`query()` filter unavailable** — `from_yaml | query('json_query', ...)` needs community.general;
+   replaced with a plain Jinja attribute expression `(vm_yaml_raw.stdout | from_yaml).spec.template.spec.volumes`.
+3. **`changed_when` referencing bare `stdout`/`result`** — in ansible-core 2.21 these are not resolved
+   inside `changed_when`. Fixed by adding `register:` to each task and referencing the registered var
+   (e.g. `stop_vm.stdout`), or dropping `changed_when` on loop tasks where the command's rc is enough.
+4. **`until:` loops failing on non-zero rc** — wait-for-gone tasks need `failed_when: false` so the
+   `until` condition (rc != 0 = NotFound) controls the outcome instead of the command failure.
+5. **JSON mangled by folded scalars** — `command: >-` strips the double quotes from the `oc patch -p`
+   JSON payload. Switched those to block scalars (`|`) with single-quoted JSON.
+6. **Shell redirection in `command:`** — the transform task uses `<`/`>` which the `command` module does
+   not interpret; switched to `shell:` with `args.executable: /bin/bash`.
+7. **PVC re-create missing `spec.resources`** — a PVC requires `spec.resources.requests.storage`; added it
+   (captured during discovery) so the recovered PVC is valid.
+8. **Final verify jsonpath split by folded scalar** — the `{range ...}` expression contained spaces that
+   `>-` collapsed; switched to a block scalar with single quotes.
+9. **Re-run after partial failure** — added a fallback so "Read the current VM" uses the saved `.bkp`
+   manifest if the source VM is already deleted (makes recovery idempotent).
+
+> Note: on this particular fresh migration the PVC did **not** go stuck-Terminating after the old VM was
+> deleted (the plan cleanup left it Bound), so the recovery branch was skipped and the renamed VM attached
+> directly. The recovery branch was exercised separately during development and is retained for MTv plans
+> that do trigger it.
