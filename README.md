@@ -386,8 +386,50 @@ oc delete pod <helper-pod> -n $NS
 | File | Purpose |
 |------|---------|
 | `README.md` | This document. |
+| `rename_vm.yml` | Ansible playbook that automates the whole procedure (including the stuck-PVC recovery). |
+| `rename_transform.py` | Python helper used by the playbook to rename + strip the VM manifest. Standalone-usable. |
 | `vader.syangsao.net_virt-linux.yaml.bkp` | Pristine backup of the original VM manifest (as retrieved from the cluster). |
 | `vader.syangsao.net_virt-linux.yaml` | The **edited** manifest used to create the renamed VM `vader` (new name, new `app` label, server fields stripped). |
+
+
+## Automating with Ansible
+
+The whole procedure is available as an Ansible playbook: `rename_vm.yml`. It performs steps 0–8 above,
+including the automatic recovery of a stuck Terminating PVC.
+
+```bash
+ansible-playbook rename_vm.yml \
+  -e vm_name=vader.syangsao.net \
+  -e new_name=vader \
+  -e namespace=virt-linux \
+  [-e start_after=true] \
+  [-e dry_run=false]
+```
+
+| Extra var | Default | Meaning |
+|-----------|---------|---------|
+| `vm_name` | — | current VirtualMachine name (required) |
+| `new_name` | — | desired new name (required) |
+| `namespace` | — | namespace the VM lives in (required) |
+| `start_after` | `true` | power the renamed VM back on at the end |
+| `dry_run` | `false` | if `true`: stop + patch PV to Retain only; do **not** delete/apply |
+
+The playbook:
+
+1. reads the live VM, backs up the manifest, and resolves each volume → PVC → PV;
+2. stops the VM and waits for the VMI to be gone;
+3. patches every bound PV to `Retain` (and asserts it);
+4. rewrites the manifest via `rename_transform.py` (rename + strip server fields) and dry-run validates it;
+5. deletes the old VM;
+6. **automatically** detects any PVC stuck in `Terminating`, removes its finalizer, re-creates the PVC
+   bound to the same PV, and manually re-binds the PV's `claimRef`;
+7. applies the renamed manifest, starts the VM, and verifies each volume still maps to its original PVC.
+
+> The transform is a plain Python script (`rename_transform.py`), so you can also use it by hand:
+>
+> ```bash
+> oc get vm $VM -n $NS -o yaml | NEW_NAME=$NEW_NAME python3 rename_transform.py > new.yaml
+> ```
 
 ---
 
