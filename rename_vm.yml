@@ -111,7 +111,7 @@
       register: pv_policy
       loop: "{{ disk_map }}"
       loop_control:
-        label: "{{ item.item.pv }}"
+        label: "{{ item.pv }}"
 
     - name: Assert all PVs are Retain
       assert:
@@ -144,6 +144,7 @@
       command: oc delete vm {{ vm_name }} -n {{ vm_namespace }}
       when: not dry_run
       register: del_vm
+      failed_when: false
       changed_when: "'deleted' in del_vm.stdout"
 
     # -------------------------------------------------------------------------

@@ -1,0 +1,77 @@
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  labels:
+    guestConverted: 'true'
+    migration: 2182a6ce-87e6-4307-ae6c-b34a63a7bbf4
+    plan: 8c0c4a10-a286-4d85-9380-5e7a314a4fee
+    plan-name: windows11-rename
+    plan-namespace: openshift-mtv
+    resource: vm-config
+    vmID: vm-45007
+  name: windows11
+  namespace: virt-windows
+spec:
+  preference:
+    kind: virtualmachineclusterpreference
+    name: windows.11
+  runStrategy: Halted
+  template:
+    metadata:
+      annotations:
+        kubevirt.io/pci-topology-version: v3
+        vm.kubevirt.io/flavor: ''
+        vm.kubevirt.io/os: ''
+        vm.kubevirt.io/workload: ''
+      labels:
+        app: windows11
+    spec:
+      architecture: amd64
+      domain:
+        clock:
+          timezone: UTC
+        cpu:
+          cores: 1
+          sockets: 2
+        devices:
+          disks:
+          - bootOrder: 1
+            disk:
+              bus: virtio
+            name: vol-0
+            serial: 6000C29e-4bd2-c5a3-b
+          inputs:
+          - bus: virtio
+            name: tablet
+            type: tablet
+          interfaces:
+          - bridge: {}
+            macAddress: 00:50:56:a5:7c:2f
+            model: virtio
+            name: net-0
+            pciAddress: 0000:0b:00.0
+          tpm:
+            persistent: true
+        features:
+          acpi: {}
+          smm:
+            enabled: true
+        firmware:
+          bootloader:
+            efi:
+              secureBoot: true
+          serial: VMware-42 25 95 e9 11 5e d3 6f-33 e3 99 99 b9 c5 d5 bf
+          uuid: 023d8b3d-7b0a-408c-9fa6-f06aff86b9f3
+        machine:
+          type: pc-q35-rhel9.8.0
+        memory:
+          guest: 8Gi
+        resources: {}
+      networks:
+      - multus:
+          networkName: default/vlan-60
+        name: net-0
+      volumes:
+      - name: vol-0
+        persistentVolumeClaim:
+          claimName: windows11-rename-vm-45007-jxbkw

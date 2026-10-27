@@ -497,3 +497,35 @@ These were real bugs in the first draft of the playbook, all fixed in the commit
 > deleted (the plan cleanup left it Bound), so the recovery branch was skipped and the renamed VM attached
 > directly. The recovery branch was exercised separately during development and is retained for MTv plans
 > that do trigger it.
+
+### Second live run — `windows11.syangsao.net` → `windows11` (virt-windows)
+
+A second end-to-end test was run against a freshly migrated **Windows 11** VM
+(`windows11.syangsao.net`, namespace `virt-windows`, PVC `windows11-rename-vm-45007-jxbkw`,
+PV `pvc-7ba03116-87a5-4901-8d09-dd31b48ed1f2`, nfs-csi, 106Gi). Result: **success** — and this run
+exercised the **stuck-Terminating-PVC recovery branch** for real.
+
+| Check | Result |
+|-------|--------|
+| Old VM `windows11.syangsao.net` | deleted (NotFound) |
+| New VM `windows11` | Running, Ready=True on `control01.syangsao.net`, same IP 192.168.60.55 |
+| VMI volume → PVC | `vol-0 → windows11-rename-vm-45007-jxbkw` (same PVC) |
+| PVC / PV | Bound to the same PV, reclaim `Retain`, 106Gi |
+| Raw disk on NFS | `disk.img` = 107,374,182,400 bytes (unchanged from baseline) |
+
+**What this run added:**
+
+- **Recovery branch proven live.** After the old VM was deleted, MTv plan cleanup set a
+  `deletionTimestamp` on the PVC and it went stuck in `Terminating` behind
+  `kubernetes.io/pvc-protection`. The playbook detected this, removed the finalizer, re-created the PVC
+  bound to the same PV, and manually re-bound the PV's `claimRef` — then applied and started the renamed
+  VM. This is the exact path that previously only had a manual walkthrough.
+- **New bug fixed — "Delete the old VM" not idempotent.** On a re-run after a partial failure the source
+  VM is already gone, so `oc delete vm …` returns rc=1 (NotFound) and failed the play. Added
+  `failed_when: false` to that task.
+- **Windows shutdown is slow / can hang.** `virtctl stop` sends a graceful ACPI shutdown; this Windows 11
+  guest took several minutes and at one point left its launcher pod stuck in `Terminating`, which held the
+  VM's deletion finalizer. The data was safe throughout (PV `Retain`). If a Windows VM ever hangs on stop,
+  force-delete its `virt-launcher-<vm>` pod to unblock: `oc delete pod <launcher> -n <ns> --grace-period=0 --force`.
+- **Cosmetic fix** — a `loop_control label` in "Verify every PV" referenced `item.item.pv` (only valid for the
+  nested-results assert task); corrected to `item.pv` to clear the templating warning.
