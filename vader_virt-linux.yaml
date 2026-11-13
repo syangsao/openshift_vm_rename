@@ -1,0 +1,123 @@
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  annotations:
+    kubectl.kubernetes.io/last-applied-configuration: |
+      {"apiVersion":"kubevirt.io/v1","kind":"VirtualMachine","metadata":{"annotations":{},"labels":{"guestConverted":"true","migration":"820cf863-681c-4841-ad88-8e8ed5524874","plan":"206d0cda-9e79-4dc5-a70c-1919ca94cbf7","plan-name":"vader-test","plan-namespace":"openshift-mtv","resource":"vm-config","vmID":"vm-10001"},"name":"vader","namespace":"virt-linux"},"spec":{"preference":{"kind":"virtualmachineclusterpreference","name":"rhel.9"},"runStrategy":"Always","template":{"metadata":{"annotations":{"kubevirt.io/pci-topology-version":"v3","vm.kubevirt.io/flavor":"","vm.kubevirt.io/os":"","vm.kubevirt.io/workload":""},"labels":{"app":"vader"}},"spec":{"architecture":"amd64","domain":{"clock":{"timezone":"UTC"},"cpu":{"cores":1,"sockets":2},"devices":{"disks":[{"bootOrder":1,"disk":{"bus":"virtio"},"name":"vol-0","serial":"6000C298-889b-f9c4-b"}],"inputs":[{"bus":"virtio","name":"tablet","type":"tablet"}],"interfaces":[{"bridge":{},"macAddress":"00:50:56:a5:74:ae","model":"virtio","name":"net-0","pciAddress":"0000:0b:00.0"}],"tpm":{"enabled":false}},"features":{"acpi":{},"smm":{"enabled":true}},"firmware":{"bootloader":{"efi":{"secureBoot":true}},"serial":"VMware-42 25 83 46 5b 06 f7 f9-b0 36 a7 88 d8 71 8e 37","uuid":"d3fa713d-258c-4d7e-add5-cddf63b9203c"},"machine":{"type":"pc-q35-rhel9.8.0"},"memory":{"guest":"8Gi"},"resources":{}},"networks":[{"multus":{"networkName":"default/vlan-60"},"name":"net-0"}],"volumes":[{"name":"vol-0","persistentVolumeClaim":{"claimName":"vader-vol-0"}}]}}}}
+    kubemacpool.io/transaction-timestamp: "2026-11-13T14:15:59.42398096Z"
+    kubevirt.io/latest-observed-api-version: v1
+    kubevirt.io/storage-observed-api-version: v1
+  creationTimestamp: "2026-11-13T14:15:59Z"
+  finalizers:
+  - kubevirt.io/virtualMachineControllerFinalize
+  generation: 1
+  labels:
+    guestConverted: "true"
+    migration: 820cf863-681c-4841-ad88-8e8ed5524874
+    plan: 206d0cda-9e79-4dc5-a70c-1919ca94cbf7
+    plan-name: vader-test
+    plan-namespace: openshift-mtv
+    resource: vm-config
+    vmID: vm-10001
+  name: vader
+  namespace: virt-linux
+  resourceVersion: "12877576"
+  uid: 6585cfd1-92c2-4cc2-8035-15feaa587805
+spec:
+  preference:
+    kind: virtualmachineclusterpreference
+    name: rhel.9
+  runStrategy: Always
+  template:
+    metadata:
+      annotations:
+        kubevirt.io/pci-topology-version: v3
+        vm.kubevirt.io/flavor: ""
+        vm.kubevirt.io/os: ""
+        vm.kubevirt.io/workload: ""
+      labels:
+        app: vader
+    spec:
+      architecture: amd64
+      domain:
+        clock:
+          timezone: UTC
+        cpu:
+          cores: 1
+          sockets: 2
+        devices:
+          disks:
+          - bootOrder: 1
+            disk:
+              bus: virtio
+            name: vol-0
+            serial: 6000C298-889b-f9c4-b
+          inputs:
+          - bus: virtio
+            name: tablet
+            type: tablet
+          interfaces:
+          - bridge: {}
+            macAddress: 00:50:56:a5:74:ae
+            model: virtio
+            name: net-0
+            pciAddress: 0000:0b:00.0
+          tpm:
+            enabled: false
+        features:
+          acpi: {}
+          smm:
+            enabled: true
+        firmware:
+          bootloader:
+            efi:
+              secureBoot: true
+          serial: VMware-42 25 83 46 5b 06 f7 f9-b0 36 a7 88 d8 71 8e 37
+          uuid: d3fa713d-258c-4d7e-add5-cddf63b9203c
+        machine:
+          type: pc-q35-rhel9.8.0
+        memory:
+          guest: 8Gi
+        resources: {}
+      networks:
+      - multus:
+          networkName: default/vlan-60
+        name: net-0
+      volumes:
+      - name: vol-0
+        persistentVolumeClaim:
+          claimName: vader-vol-0
+status:
+  conditions:
+  - lastProbeTime: null
+    lastTransitionTime: "2026-11-13T14:16:02Z"
+    status: "True"
+    type: Ready
+  - lastProbeTime: null
+    lastTransitionTime: null
+    message: All of the VMI's DVs are bound and ready
+    reason: AllDVsReady
+    status: "True"
+    type: DataVolumesReady
+  - lastProbeTime: null
+    lastTransitionTime: null
+    status: "True"
+    type: LiveMigratable
+  - lastProbeTime: null
+    lastTransitionTime: null
+    status: "True"
+    type: StorageLiveMigratable
+  created: true
+  desiredGeneration: 1
+  observedGeneration: 1
+  preferenceRef:
+    controllerRevisionRef:
+      name: vader-rhel.9-v1beta1-96b86dfe-2252-4495-a597-e4c6dd912bc1-1
+    kind: virtualmachineclusterpreference
+    name: rhel.9
+  printableStatus: Running
+  ready: true
+  runStrategy: Always
+  volumeSnapshotStatuses:
+  - enabled: true
+    name: vol-0

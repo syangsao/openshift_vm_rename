@@ -1,0 +1,32 @@
+apiVersion: v1
+kind: List
+items: [
+    {
+        "apiVersion": "cdi.kubevirt.io/v1beta1",
+        "kind": "DataVolume",
+        "metadata": {
+            "name": "vader-vol-0",
+            "namespace": "virt-linux"
+        },
+        "spec": {
+            "source": {
+                "pvc": {
+                    "name": "vader-test-vm-10001-bsqld",
+                    "namespace": "virt-linux"
+                }
+            },
+            "storage": {
+                "accessModes": [
+                    "ReadWriteMany"
+                ],
+                "resources": {
+                    "requests": {
+                        "storage": "113816633344"
+                    }
+                },
+                "storageClassName": "nfs-csi",
+                "volumeMode": "Filesystem"
+            }
+        }
+    }
+]
